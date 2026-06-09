@@ -1,0 +1,17 @@
+// Non-compliant resources across ALL subscriptions
+// Run in Azure Resource Graph Explorer
+// Note: ~15 query/5sec throttle per tenant -- implement Power BI caching
+
+PolicyResources
+| where type == "microsoft.policyinsights/policystates"
+| where properties.complianceState == "NonCompliant"
+| summarize
+    NonCompliantCount     = count(),
+    AffectedSubscriptions = dcount(subscriptionId),
+    LatestViolation       = max(tostring(properties.timestamp))
+    by
+    PolicyName     = tostring(properties.policyDefinitionName),
+    PolicyCategory = tostring(properties.policyDefinitionCategory),
+    ResourceType   = tostring(properties.resourceType)
+| order by NonCompliantCount desc
+| take 20

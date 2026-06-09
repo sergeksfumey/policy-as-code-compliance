@@ -1,0 +1,13 @@
+// Compliance trend -- 30-day posture history
+// Detects drift: alert if compliance rate drops >5% week-over-week
+
+PolicyResources
+| where type == "microsoft.policyinsights/policystates"
+| where tostring(properties.timestamp) > ago(30d)
+| summarize
+    CompliantCount    = countif(tostring(properties.complianceState) == "Compliant"),
+    NonCompliantCount = countif(tostring(properties.complianceState) == "NonCompliant")
+    by Day = bin(todatetime(tostring(properties.timestamp)), 1d)
+| extend ComplianceRate = round((CompliantCount * 100.0) / (CompliantCount + NonCompliantCount), 1)
+| project Day, ComplianceRate, CompliantCount, NonCompliantCount
+| order by Day asc

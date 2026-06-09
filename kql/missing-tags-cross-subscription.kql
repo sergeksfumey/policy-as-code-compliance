@@ -1,0 +1,12 @@
+// Resources missing required tags -- cross-subscription
+// Feed to automated tagging Azure Function
+
+Resources
+| where isnull(tags["environment"]) or isnull(tags["owner"]) or isnull(tags["cost-centre"])
+| summarize
+    ResourceCount     = count(),
+    MissingEnvCount   = countif(isnull(tags["environment"])),
+    MissingOwnerCount = countif(isnull(tags["owner"])),
+    MissingCCCount    = countif(isnull(tags["cost-centre"]))
+    by ResourceType = type, Subscription = subscriptionId, ResourceGroup = resourceGroup
+| order by ResourceCount desc

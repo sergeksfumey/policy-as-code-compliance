@@ -1,0 +1,89 @@
+trigger:
+  branches:
+    include: [main, test, develop]
+  paths:
+    include: [governance/**]
+
+variables:
+  - group: governance-platform-vars
+  - name: TF_VERSION
+    value: '1.6.0'
+
+stages:
+  - stage: ValidateGovernance
+    displayName: Validate and Schema Check
+    jobs:
+      - job: PolicyValidation
+        pool: { vmImage: ubuntu-latest }
+        steps:
+          - task: TerraformInstaller@1
+            inputs: { terraformVersion: $(TF_VERSION) }
+          - script: cd governance && terraform init -backend=false && terraform validate
+            displayName: Terraform validate
+          - script: pip install checkov && checkov -d governance/ --framework terraform --quiet
+            displayName: Checkov scan
+          - script: python scripts/validate_policy_json.py
+            displayName: Policy JSON validation
+
+  - stage: PlanGovernance
+    dependsOn: ValidateGovernance
+    condition: succeeded()
+    jobs:
+      - job: TerraformPlan
+        pool: { vmImage: ubuntu-latest }
+        steps:
+          - task: TerraformInstaller@1
+            inputs: { terraformVersion: $(TF_VERSION) }
+          - task: AzureCLI@2
+            displayName: Terraform Plan
+            inputs:
+              azureSubscription: $(AZURE_SERVICE_CONNECTION)
+              scriptType: bash
+              scriptLocation: inlineScript
+              addSpnToEnvironment: true
+              inlineScript: |
+                export ARM_USE_OIDC=true ARM_CLIENT_ID=$servicePrincipalId ARM_OIDC_TOKEN=$idToken ARM_TENANT_ID=$tenantId
+                export ARM_SUBSCRIPTION_ID=$(az account show --query id -o tsv)
+                cd governance && terraform init && terraform plan -out=governance.tfplan
+          - publish: governance/governance.tfplan
+            artifact: governance-plan
+
+  - stage: ApproveProduction
+    dependsOn: PlanGovernance
+    condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'))
+    jobs:
+      - deployment: GovernanceApprovalGate
+        pool: server
+        environment: governance-production
+        strategy:
+          runOnce:
+            deploy:
+              steps: [{ script: echo "Approved" }]
+
+  - stage: DeployGovernance
+    dependsOn: [PlanGovernance, ApproveProduction]
+    condition: succeeded()
+    jobs:
+      - deployment: TerraformApply
+        environment: production
+        pool: { vmImage: ubuntu-latest }
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - task: TerraformInstaller@1
+                  inputs: { terraformVersion: $(TF_VERSION) }
+                - download: current
+                  artifact: governance-plan
+                - task: AzureCLI@2
+                  displayName: Terraform Apply
+                  inputs:
+                    azureSubscription: $(AZURE_SERVICE_CONNECTION)
+                    scriptType: bash
+                    scriptLocation: inlineScript
+                    addSpnToEnvironment: true
+                    inlineScript: |
+                      export ARM_USE_OIDC=true ARM_CLIENT_ID=$servicePrincipalId ARM_OIDC_TOKEN=$idToken ARM_TENANT_ID=$tenantId
+                      export ARM_SUBSCRIPTION_ID=$(az account show --query id -o tsv)
+                      cd governance && terraform init
+                      terraform apply $(Pipeline.Workspace)/governance-plan/governance.tfplan
